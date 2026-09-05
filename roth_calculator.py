@@ -424,7 +424,7 @@ st.sidebar.header("User Financial Profile")
 user_config = {
     "traditional_ira": st.sidebar.number_input("Traditional IRA Balance ($)", value=1700000.0, step=50000.0),
     "roth_ira": st.sidebar.number_input("Starting Roth IRA Balance ($)", value=0.0, step=10000.0),
-    "taxable_brokerage": st.sidebar.number_input("Taxable Brokerage Balance ($)", value=6300000.0, step=50000.0),
+    "taxable_brokerage": st.sidebar.number_input("Taxable Brokerage Balance ($)", value=1000000.0, step=50000.0),
     "base_spend": st.sidebar.slider("Annual Base Lifestyle Spend ($)", 20000, 200000, 50000),
     "sp500_growth": st.sidebar.slider("S&P 500 Growth Rate (%)", 3.0, 10.0, 7.0) / 100,
     "div_rate": 0.013,
