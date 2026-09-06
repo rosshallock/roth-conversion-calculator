@@ -291,8 +291,9 @@ def calculate_final_amount (config, mode="random"):
     traditional_discount_factor = config["traditional_discount_factor"]
     other_income = config["other_income"]
 
-    # Initialize a container for stream of conversions
+    # Initialize containers for tracking
     conversion_amounts = []
+    portfolio_timeline = []
 
     # --- 1. THE AUTOMATED LOOP ---
     # range(2027, death_year) runs from 2027 up to (but not including) death_year
@@ -360,10 +361,12 @@ def calculate_final_amount (config, mode="random"):
         if taxable_brokerage < 0:
             # Money to pay taxes on Roth conversion can only come out of an IRA without penalty after age 60
             if age < 60:
-                return 0, conversion_amounts
+                return 0, conversion_amounts, []
             else:
                 roth_ira += taxable_brokerage
                 taxable_brokerage = 0
+                if roth_ira < 0:
+                    return 0, conversion_amounts, []
        
         # 3. Execute the Roth conversion shift
         traditional_ira -= annual_conversion
@@ -372,14 +375,25 @@ def calculate_final_amount (config, mode="random"):
         # 4.  Deduct rmd from traditional account
         traditional_ira -= rmd
         
-        # 2. Apply S&P 500 growth to all balances for the next year
+        # 5. Apply S&P 500 growth to all balances for the next year
         traditional_ira *= (1 + sp500_growth)
         roth_ira *= (1 + sp500_growth)
         taxable_brokerage *= (1 + sp500_growth)
 
+        #6 Keep track of portfolio over time
+        snapshot = {
+            "Year": current_year,
+            "Trad IRA": round(traditional_ira, 2),
+            "Roth IRA": round(roth_ira, 2),
+            "Taxable": round(taxable_brokerage, 2),
+            "Taxes Owed": round(taxes_owed, 2)
+        }
+
+        portfolio_timeline.append(snapshot)
+
     final_amount = taxable_brokerage + roth_ira + traditional_ira * traditional_discount_factor
 
-    return final_amount, conversion_amounts
+    return final_amount, conversion_amounts, portfolio_timeline
 
 def random_bracket_fill_amount(pre_conversion_ordinary, divs_received, current_year, config):
     """
@@ -430,23 +444,25 @@ def run_optimization_loop(config, iterations=10000):
     Compares random conversion streams against a fixed baseline.
     """
     # 1. Establish the "zero conversion" baseline using the passed config dictionary
-    final_amount, conversion_amounts = calculate_final_amount(config, "zero")
+    final_amount, conversion_amounts, baseline_timeline = calculate_final_amount(config, "zero")
     
     print(f"Baseline (No Conversions): ${final_amount / 1000000:.2f} million")
     
     # Set up our tracking variables
     max_amount = final_amount
     max_conversion_stream = conversion_amounts
+    best_timeline = baseline_timeline
 
     # 2. Run the optimization search block
     print(f"Searching {iterations:,} random strategies for the optimal path...")
 
     for i in range(iterations):
-        final_amount, conversion_amounts = calculate_final_amount(config, "random")
+        final_amount, conversion_amounts, current_timeline = calculate_final_amount(config, "random")
         
         if final_amount > max_amount:
             max_amount = final_amount
             max_conversion_stream = conversion_amounts
+            best_timeline = current_timeline
 
     # 3. Print the final winning totals and return them
     print("=========================================")
@@ -461,7 +477,7 @@ def run_optimization_loop(config, iterations=10000):
         print(f"  Year {cal_year}: ${amount:,.2f}")
     print("=========================================\n")
     
-    return max_amount, max_conversion_stream
+    return max_amount, max_conversion_stream, best_timeline
 
 my_profile = {
     "traditional_ira": 1700000.00,
@@ -526,10 +542,10 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
         with st.spinner("Calculating optimal tax strategies..."):
             
             # Run your baseline logic using the interactive dictionary
-            baseline_amount, _ = calculate_final_amount(user_config, mode="zero")
+            baseline_amount, _, _ = calculate_final_amount(user_config, mode="zero")
             
             # Run your optimization loop function (which returns max_amount and max_conversion_stream)
-            max_amount, max_conversion_stream = run_optimization_loop(user_config, iterations=10000)
+            max_amount, max_conversion_stream, best_timeline = run_optimization_loop(user_config, iterations=10000)
             
             # Print summary statistics onto the web page dashboard
             st.success("Optimization Complete!")
@@ -566,5 +582,22 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
                 use_container_width=True,
                 hide_index=True
             )
+
+            # 🚀 NEW: Visual Balance Projection Chart
+            st.subheader("📈 50-Year Portfolio Value Projection")
+            st.write("Track how your account balances shift over time under your optimized conversion strategy:")
+
+            # 1. Convert the best_timeline list of dictionaries into a Pandas DataFrame
+            chart_df = pd.DataFrame(best_timeline)
+
+            # 2. Re-index the DataFrame rows by 'Year' so the horizontal axis plots chronologically
+            chart_df = chart_df.set_index("Year")
+
+            # 3. Filter out 'Taxes Owed' so the chart strictly focuses on your asset pools
+            asset_chart_df = chart_df[["Trad IRA", "Roth IRA", "Taxable"]]
+
+            # 4. Generate the fully interactive line chart widget
+            st.line_chart(asset_chart_df, use_container_width=True)
+
 
 run_optimization_loop(my_profile)
