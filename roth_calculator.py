@@ -274,7 +274,7 @@ def generate_amounts(number_conversions, mode="random"):
         raise ValueError("Invalid mode. Choose either 'zero' or 'random'.")
 
 
-def calculate_final_amount (config, mode="random"):
+def calculate_final_amount (config, mode="random", fixed_tokens=None):
 
     # Extract values from the config dictionary
 
@@ -294,12 +294,19 @@ def calculate_final_amount (config, mode="random"):
     # Initialize containers for tracking
     conversion_amounts = []
     portfolio_timeline = []
+    token_history = []
+    # The token_history tracks which strategy was chosen each year.
+    # 0 = zero conversion.
+    # 1 = fill 12% bracket
+    # 2 = fill 22% bracket
+    # 3 = fill 24% bracket
 
     # --- 1. THE AUTOMATED LOOP ---
     # range(2027, death_year) runs from 2027 up to (but not including) death_year
     for current_year in range(first_year_of_conversions, death_year):
 
         age = current_year - birth_year
+        index = current_year - first_year_of_conversions
 
         # [B] Execute your financial math (Runs once per year automatically)
 
@@ -321,7 +328,7 @@ def calculate_final_amount (config, mode="random"):
         # 1.4.1 If determining baseline, set all conversion amounts to zero
 
         # 1.4.3 For each year prior to age 75, pick a random conversion amount that is either zero or
-        # an amount that fills a bracket
+        # an amount that fills a bracket.  
              
         if age > 74:
             annual_conversion = 0
@@ -330,16 +337,30 @@ def calculate_final_amount (config, mode="random"):
             # 1.4.1 If determining baseline, set all conversion amounts to zero
             if mode == "zero":
                 annual_conversion = 0
+                chosen_token = 0
 
             # Otherwise pick a random conversion amount that is either zero or a number that fills a bracket
             else:
                 #set the conversion amount equal to zero to determine ordinary income before any conversion
                 pre_conversion_ordinary = calculate_ordinary_income(rmd, 0, social_security, other_income)
 
-                annual_conversion = random_bracket_fill_amount(pre_conversion_ordinary, divs_received, current_year, config)
+                #Call a bracket function that returns all options explicitly
+                room_12, room_22, room_24 = get_all_bracket_options(pre_conversion_ordinary, current_year, config)
+                options_pool = [0.0, room_12, room_22, room_24]
+
+                if fixed_tokens is not None and index< len(fixed_tokens):
+                    #Hill climber mode: Use the specific bracket strategy forced
+                    chosen_token = fixed_tokens[index]
+                    annual_conversion = options_pool[chosen_token]
+
+                else:
+                    #Random search mode: Randomly pick one of the 4 conversion strategies
+                    chosen_token = random.choice([0, 1, 2, 3])
+                    annual_conversion = options_pool[chosen_token]
 
             # Fill in the conversion_amounts container
             conversion_amounts.append(annual_conversion)
+            token_history.append(chosen_token)
 
         #1.5 Determine taxes owed after conversion
 
@@ -361,12 +382,15 @@ def calculate_final_amount (config, mode="random"):
         if taxable_brokerage < 0:
             # Money to pay taxes on Roth conversion can only come out of an IRA without penalty after age 60
             if age < 60:
-                return 0, conversion_amounts, []
+                return 0, conversion_amounts, [], []
             else:
                 roth_ira += taxable_brokerage
                 taxable_brokerage = 0
                 if roth_ira < 0:
-                    return 0, conversion_amounts, []
+                    traditional_ira += roth_ira
+                    roth_ira = 0
+                    if traditional_ira < 0:
+                        return 0, conversion_amounts, [], []
        
         # 3. Execute the Roth conversion shift
         traditional_ira -= annual_conversion
@@ -393,12 +417,44 @@ def calculate_final_amount (config, mode="random"):
 
     final_amount = taxable_brokerage + roth_ira + traditional_ira * traditional_discount_factor
 
-    return final_amount, conversion_amounts, portfolio_timeline
+    return final_amount, conversion_amounts, portfolio_timeline, token_history
 
-def random_bracket_fill_amount(pre_conversion_ordinary, divs_received, current_year, config):
+def generic_hill_climb_polish(config, starting_tokens, starting_amount, steps=300):
+    """
+    Generically polishes ANY incoming token list strategy by iteratively 
+    tweaking random years to alternative bracket strategies.
+    """
+    current_best_amount = starting_amount
+    current_best_tokens = list(starting_tokens)
+    
+    for _ in range(steps):
+        random_year_idx = random.randint(0, len(current_best_tokens) - 1)
+        original_token = current_best_tokens[random_year_idx]
+        
+        # Select from alternative strategy tokens (0=zero, 1=12%, 2=22%, 3=24%)
+        alternatives = [t for t in [0, 1, 2, 3] if t != original_token]
+        tweaked_token = random.choice(alternatives)
+        
+        current_best_tokens[random_year_idx] = tweaked_token
+        
+        # Evaluate the tweaked sequence
+        test_amount, _, _, _ = calculate_final_amount(config, mode="random", fixed_tokens=current_best_tokens)
+        
+        if test_amount > current_best_amount:
+            current_best_amount = test_amount
+        else:
+            current_best_tokens[random_year_idx] = original_token
+            
+    # Extract final clean timeline details for the winner
+    final_amt, final_stream, final_timeline, final_tokens = calculate_final_amount(
+        config, mode="random", fixed_tokens=current_best_tokens
+    )
+    return final_amt, final_stream, final_timeline, final_tokens
+
+def get_all_bracket_options(pre_conversion_ordinary, current_year, config):
     """
     Determines the exact conversion amounts needed to fill the 12%, 22%, and 24% 
-    tax brackets for the current year, then randomly picks either one of those or zero.
+    tax brackets for the current year
     """
     # 1. Unpack structural inflation factor from config
     inflation_factor = config["inflation_factor"]
@@ -430,59 +486,102 @@ def random_bracket_fill_amount(pre_conversion_ordinary, divs_received, current_y
     room_in_22 = max(0.0, max_gross_for_22 - pre_conversion_ordinary)
     room_in_24 = max(0.0, max_gross_for_24 - pre_conversion_ordinary)
 
-    # 7. Execute the smart random choice selector
-    choices = [0.0, round(room_in_12, 2), round(room_in_22, 2), round(room_in_24, 2)]
-    chosen_conversion = random.choice(choices)
-
-    return chosen_conversion
-
-
+    return round(room_in_12, 2), round(room_in_22, 2), round(room_in_24, 2)
 
 def run_optimization_loop(config, iterations=10000):
     """
-    Runs the full optimization simulation loop over a set number of iterations.
-    Compares random conversion streams against a fixed baseline.
+    Runs an exploratory random token search to find the Top 5 unique strategy candidates,
+    then automatically passes each through a Hill Climbing polisher to find the
+    absolute precision maximum estate value.
     """
-    # 1. Establish the "zero conversion" baseline using the passed config dictionary
-    final_amount, conversion_amounts, baseline_timeline = calculate_final_amount(config, "zero")
+    # 1. Establish the "zero conversion" baseline floor
+    baseline_amount, baseline_stream, baseline_timeline, baseline_tokens = calculate_final_amount(config, "zero")
+    print(f"Baseline Value (No Conversions): ${baseline_amount / 1000000:.2f} million")
     
-    print(f"Baseline (No Conversions): ${final_amount / 1000000:.2f} million")
+    # 2. Exploratory Phase: Gather the Top 5 Unique Strategies
+    top_strategies = []  # Will hold tuples of (final_amount, token_list)
     
-    # Set up our tracking variables
-    max_amount = final_amount
-    max_conversion_stream = conversion_amounts
-    best_timeline = baseline_timeline
-
-    # 2. Run the optimization search block
-    print(f"Searching {iterations:,} random strategies for the optimal path...")
-
+    print(f"Searching {iterations:,} random token combinations to map the tax brackets...")
     for i in range(iterations):
-        final_amount, conversion_amounts, current_timeline = calculate_final_amount(config, "random")
+        amt, stream, timeline, tokens = calculate_final_amount(config, mode="random")
         
-        if final_amount > max_amount:
-            max_amount = final_amount
-            max_conversion_stream = conversion_amounts
-            best_timeline = current_timeline
+        # Ignore failed bankrupt runs (where return score is 0)
+        if amt <= 0:
+            continue
+            
+        # Add to candidate pool, sort by highest amount, and keep strictly the top 5
+        top_strategies.append((amt, tokens))
+        top_strategies.sort(key=lambda x: x[0], reverse=True)
+        top_strategies = top_strategies[:5]
 
-    # 3. Print the final winning totals and return them
-    print("=========================================")
-    print(f"🏆 OPTIMIZED ESTATE VALUE: ${max_amount / 1000000:.2f} million")
-    print("=========================================")
+    print("\n--- Top 5 Random Candidates Discovered ---")
+    for idx, (amt, _) in enumerate(top_strategies):
+        print(f"  Candidate #{idx+1}: ${amt / 1000000:.2f} million")
 
-    print("Optimal Annual Conversion Stream Found:")
+    # 3. Precision Phase: Run Hill Climbing on all Top 5 candidates
+    print("\nPolishing all top candidates via Hill Climbing...")
+    
+    absolute_best_amount = baseline_amount
+    absolute_best_stream = []
+    absolute_best_timeline = []
+    absolute_best_tokens = []
+
+    for idx, (amt, tokens) in enumerate(top_strategies):
+        # Pass each candidate to the generic polisher
+        polished_amt, polished_stream, polished_timeline, polished_tokens = generic_hill_climb_polish(
+            config, tokens, amt, steps=300
+        )
+        print(f"  Candidate #{idx+1} polished from ${amt / 1000000:.2f}M -> ${polished_amt / 1000000:.2f}M")
+        
+        # Track the absolute winner across all 5 polished tracks
+        if polished_amt > absolute_best_amount:
+            absolute_best_amount = polished_amt
+            absolute_best_stream = polished_stream
+            absolute_best_timeline = polished_timeline
+            absolute_best_tokens = polished_tokens
+
+    # GLITCH FIX: If the baseline "do nothing" strategy won, the lists are empty.
+    # We populate them with the baseline arrays so the console and Streamlit have data to show.
+    if absolute_best_amount == baseline_amount or len(absolute_best_stream) == 0:
+        absolute_best_amount = baseline_amount
+        absolute_best_stream = baseline_stream if len(baseline_stream) > 0 else [0.0] * number_conversions
+        absolute_best_timeline = baseline_timeline
+        absolute_best_tokens = baseline_tokens if len(baseline_tokens) > 0 else [0] * number_conversions
+
+    print("\n=========================================")
+    print(f"🏆 ULTIMATE HYBRID OPTIMIZED ESTATE VALUE: ${absolute_best_amount / 1000000:.2f} million")
+    print("=========================================")
+    
+    # 🚨 NEW: Loop through and print out the ultimate conversion schedule beautifully
+    print("Optimal Annual Conversion Stream Found After Polishing:")
     start_year = config["first_year_of_conversions"]
     
-    for year_idx, amount in enumerate(max_conversion_stream):
+    # Text mapping to translate tokens into friendly labels
+    strategy_mapping = {
+        0: "Zero Conversion",
+        1: "Fill 12% Bracket",
+        2: "Fill 22% Bracket",
+        3: "Fill 24% Bracket"
+    }
+
+    for year_idx, amount in enumerate(absolute_best_stream):
         cal_year = start_year + year_idx
-        print(f"  Year {cal_year}: ${amount:,.2f}")
+
+        # Look up the token matching this exact year from the absolute_best_tokens array
+        chosen_token = absolute_best_tokens[year_idx]
+        strategy_name = strategy_mapping[chosen_token]
+        
+        print(f"  Year {cal_year}: ${amount:,.2f} -> {strategy_name}")
+        
     print("=========================================\n")
-    
-    return max_amount, max_conversion_stream, best_timeline
+
+# Return the absolute champion's data to the Streamlit UI dashboard
+    return absolute_best_amount, absolute_best_stream, absolute_best_timeline, absolute_best_tokens
 
 my_profile = {
     "traditional_ira": 1700000.00,
     "roth_ira": 0.00,
-    "taxable_brokerage": 1000000.00,
+    "taxable_brokerage": 7000000.00,
     "base_spend": 100000.00,
     "sp500_growth": 0.07,
     "div_rate": 0.013,
@@ -542,10 +641,10 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
         with st.spinner("Calculating optimal tax strategies..."):
             
             # Run your baseline logic using the interactive dictionary
-            baseline_amount, _, _ = calculate_final_amount(user_config, mode="zero")
+            baseline_amount, _, _, _ = calculate_final_amount(user_config, mode="zero")
             
             # Run your optimization loop function (which returns max_amount and max_conversion_stream)
-            max_amount, max_conversion_stream, best_timeline = run_optimization_loop(user_config, iterations=10000)
+            max_amount, max_conversion_stream, best_timeline, best_tokens = run_optimization_loop(user_config, iterations=10000)
             
             # Print summary statistics onto the web page dashboard
             st.success("Optimization Complete!")
@@ -562,15 +661,26 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
             else:
                 st.write("📉 For this profile, a strategy of **Zero Conversions** is mathematically optimal.")
 
-            # 🚨 NEW: Structure the schedule into a clean table for the user interface
             st.subheader("🗓️ Optimal Annual Conversion Schedule")
+
+            # Dictionary map to translate token numbers into readable text strings
+            strategy_mapping = {
+                0: "Zero Conversion",
+                1: "Fill 12% Bracket",
+                2: "Fill 22% Bracket",
+                3: "Fill 24% Bracket"
+            }
+            # Translate your raw token history list into text strings
+            strategy_names = [strategy_mapping[token] for token in best_tokens]
+
             st.write("This stream represents the highest scoring sequence discovered by the simulator:")
             
             # Build matching calendar years list
             start_year = user_config["first_year_of_conversions"]
             schedule_data = {
                 "Calendar Year": [start_year + idx for idx in range(len(max_conversion_stream))],
-                "Conversion Amount": max_conversion_stream
+                "Conversion Amount": max_conversion_stream,
+                "Tax Strategy Chosen": strategy_names
             }
             
             # Convert to a data framework layout
@@ -583,12 +693,15 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
                 hide_index=True
             )
 
-            # 🚀 NEW: Visual Balance Projection Chart
+            # Visual Balance Projection Chart
             st.subheader("📈 50-Year Portfolio Value Projection")
             st.write("Track how your account balances shift over time under your optimized conversion strategy:")
 
             # 1. Convert the best_timeline list of dictionaries into a Pandas DataFrame
             chart_df = pd.DataFrame(best_timeline)
+
+             # 1.1: Force the 'Year' column entries to be read as string characters to wipe out the formatting commas
+            chart_df["Year"] = chart_df["Year"].astype(str)
 
             # 2. Re-index the DataFrame rows by 'Year' so the horizontal axis plots chronologically
             chart_df = chart_df.set_index("Year")
