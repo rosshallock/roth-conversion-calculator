@@ -4,11 +4,11 @@
 #=====================================================================
 """
 Purpose:
-  Simulates a 28-year financial timeline (from 2027 to 2054) to 
+  Simulates a financial timeline to 
   determine the optimal multi-year Roth conversion schedule. 
   
 Strategy & Methodology:
-  - Generates a 23-year active conversion stream (terminating at age 75 
+  - Generates an active conversion stream (terminating at age 75 
     to completely avoid overlapping with Required Minimum Distributions).
   - Uses a 10,000-run random simulation loop to benchmark various 
     annual conversion strategies against a baseline "Zero Conversion" plan.
@@ -289,25 +289,19 @@ def calculate_final_amount (config, mode="random"):
     death_year = config["death_year"]
     first_year_of_conversions = config["first_year_of_conversions"]
     traditional_discount_factor = config["traditional_discount_factor"]
+    other_income = config["other_income"]
 
-     # --- 1.1 GENERATE RANDOM OR ZERO'ED CONVERSION AMOUNTS
-    number_conversions = birth_year + 74 - first_year_of_conversions #Use 75 because that is when RMD's begin to be required
-    conversion_amounts = generate_amounts(number_conversions, mode)
+    # Initialize a container for stream of conversions
+    conversion_amounts = []
 
-    # --- 2. THE AUTOMATED LOOP ---
+    # --- 1. THE AUTOMATED LOOP ---
     # range(2027, death_year) runs from 2027 up to (but not including) death_year
     for current_year in range(first_year_of_conversions, death_year):
-        
+
+        age = current_year - birth_year
+
         # [B] Execute your financial math (Runs once per year automatically)
 
-        # 1.01 Determine annual conversion
-        # 1. Calculate how many years have passed since the start
-        index = current_year - first_year_of_conversions
-        # 2. If index is within the list, get the amount. Otherwise, set to 0.
-        if index < len(conversion_amounts):
-            annual_conversion = conversion_amounts[index]
-        else:
-            annual_conversion = 0
             
         # 1.1 Determine dividends received from the non-tax advantaged account
         divs_received = div_rate * taxable_brokerage
@@ -315,28 +309,57 @@ def calculate_final_amount (config, mode="random"):
         # 1.2 Determine required minimum distribution
         rmd = calculate_rmd(current_year, traditional_ira, birth_year)
 
-        # 1.3 Determine taxes owed
-        if current_year >= birth_year + 62:
+        # 1.3 Determine social security
+        if age >= 62:
             social_security = 35628
         else:
             social_security = 0
-        ordinary_income = calculate_ordinary_income(rmd, annual_conversion, social_security)
+
+        # 1.4 Determine annual conversion amount
+
+        # 1.4.1 If determining baseline, set all conversion amounts to zero
+
+        # 1.4.3 For each year prior to age 75, pick a random conversion amount that is either zero or
+        # an amount that fills a bracket
+             
+        if age > 74:
+            annual_conversion = 0
+        
+        else:
+            # 1.4.1 If determining baseline, set all conversion amounts to zero
+            if mode == "zero":
+                annual_conversion = 0
+
+            # Otherwise pick a random conversion amount that is either zero or a number that fills a bracket
+            else:
+                #set the conversion amount equal to zero to determine ordinary income before any conversion
+                pre_conversion_ordinary = calculate_ordinary_income(rmd, 0, social_security, other_income)
+
+                annual_conversion = random_bracket_fill_amount(pre_conversion_ordinary, divs_received, current_year, config)
+
+            # Fill in the conversion_amounts container
+            conversion_amounts.append(annual_conversion)
+
+        #1.5 Determine taxes owed after conversion
+
+        ordinary_income = calculate_ordinary_income(rmd, annual_conversion, social_security, other_income)
 
         taxes_owed = calculate_federal_tax(ordinary_income, divs_received, current_year, inflation_factor)
 
-        # 1.4 Determine adjustments to taxable account
+        # 2. Determine adjustments to taxable account
         annual_spend = calculate_inflated_spend(base_spend, first_year_of_conversions, current_year, inflation_factor)
         taxable_brokerage -= annual_spend
 
         taxable_brokerage += social_security
         taxable_brokerage += rmd
         taxable_brokerage += divs_received
+        taxable_brokerage += other_income
         taxable_brokerage -= taxes_owed
 
         # check for bankruptcy
         if taxable_brokerage < 0:
             # Money to pay taxes on Roth conversion can only come out of an IRA without penalty after age 60
-            if current_year < birth_year + 60:
+            if age < 60:
                 return 0, conversion_amounts
             else:
                 roth_ira += taxable_brokerage
@@ -357,6 +380,49 @@ def calculate_final_amount (config, mode="random"):
     final_amount = taxable_brokerage + roth_ira + traditional_ira * traditional_discount_factor
 
     return final_amount, conversion_amounts
+
+def random_bracket_fill_amount(pre_conversion_ordinary, divs_received, current_year, config):
+    """
+    Determines the exact conversion amounts needed to fill the 12%, 22%, and 24% 
+    tax brackets for the current year, then randomly picks either one of those or zero.
+    """
+    # 1. Unpack structural inflation factor from config
+    inflation_factor = config["inflation_factor"]
+
+    # 2. Baseline Structural Tax Parameters (2026 Single Status)
+    ORDINARY_BRACKETS_2026 = [
+        (12400.00, 0.10), (50400.00, 0.12), (105700.00, 0.22),
+        (201775.00, 0.24), (256225.00, 0.32), (640600.00, 0.35), (float('inf'), 0.37)
+    ]
+    STANDARD_DEDUCTION_BASE = [(16100.00, 1.0)]
+
+    # 3. Inflate the brackets and standard deduction for the simulated year
+    current_ord_brackets = inflate_tax_brackets(ORDINARY_BRACKETS_2026, 2026, current_year, inflation_factor)
+    inflated_deduction_list = inflate_tax_brackets(STANDARD_DEDUCTION_BASE, 2026, current_year, inflation_factor)
+    current_standard_deduction = inflated_deduction_list[0][0]
+
+    # 4. Extract top boundaries for target brackets
+    top_of_12_bracket = current_ord_brackets[1][0]  # The $50,400 line (inflated)
+    top_of_22_bracket = current_ord_brackets[2][0]  # The $105,700 line (inflated)
+    top_of_24_bracket = current_ord_brackets[3][0]  # The $201,775 line (inflated)
+
+    # 5. Calculate Gross Gross Caps (Bracket Boundary + Standard Deduction)
+    max_gross_for_12 = top_of_12_bracket + current_standard_deduction
+    max_gross_for_22 = top_of_22_bracket + current_standard_deduction
+    max_gross_for_24 = top_of_24_bracket + current_standard_deduction
+
+    # 6. Calculate remaining space (Floor at 0.0 if other income already fills it)
+    room_in_12 = max(0.0, max_gross_for_12 - pre_conversion_ordinary)
+    room_in_22 = max(0.0, max_gross_for_22 - pre_conversion_ordinary)
+    room_in_24 = max(0.0, max_gross_for_24 - pre_conversion_ordinary)
+
+    # 7. Execute the smart random choice selector
+    choices = [0.0, round(room_in_12, 2), round(room_in_22, 2), round(room_in_24, 2)]
+    chosen_conversion = random.choice(choices)
+
+    return chosen_conversion
+
+
 
 def run_optimization_loop(config, iterations=10000):
     """
@@ -400,15 +466,16 @@ def run_optimization_loop(config, iterations=10000):
 my_profile = {
     "traditional_ira": 1700000.00,
     "roth_ira": 0.00,
-    "taxable_brokerage": 630000.00,
-    "base_spend": 50000.00,
+    "taxable_brokerage": 1000000.00,
+    "base_spend": 100000.00,
     "sp500_growth": 0.07,
     "div_rate": 0.013,
     "inflation_factor": 0.023,
     "birth_year": 1975,
     "death_year": 2065,
     "first_year_of_conversions": 2027,
-    "traditional_discount_factor": 0.77
+    "traditional_discount_factor": 0.77,
+    "other_income": 0
 }
 
 import streamlit as st
@@ -425,60 +492,79 @@ user_config = {
     "traditional_ira": st.sidebar.number_input("Traditional IRA Balance ($)", value=1700000.0, step=50000.0),
     "roth_ira": st.sidebar.number_input("Starting Roth IRA Balance ($)", value=0.0, step=10000.0),
     "taxable_brokerage": st.sidebar.number_input("Taxable Brokerage Balance ($)", value=1000000.0, step=50000.0),
-    "base_spend": st.sidebar.slider("Annual Base Lifestyle Spend ($)", 20000, 200000, 50000),
+    "base_spend": st.sidebar.slider("Annual Base Lifestyle Spend ($)", 20000, 200000, 100000),
     "sp500_growth": st.sidebar.slider("S&P 500 Growth Rate (%)", 3.0, 10.0, 7.0) / 100,
     "div_rate": 0.013,
     "inflation_factor": 0.023,
     "birth_year": st.sidebar.number_input("Birth Year", value=1975, step=1),
     "death_year": st.sidebar.number_input("Simulate Until Year (Death Year)", value=2065, step=1),
     "first_year_of_conversions": 2027,
-    "traditional_discount_factor": st.sidebar.slider("Heir Tax Discount Factor (0.77 = 23% tax)", 0.50, 1.00, 0.77)
+    "traditional_discount_factor": st.sidebar.slider("Heir Tax Discount Factor (0.77 = 23% tax)", 0.50, 1.00, 0.77),
+    "other_income": st.sidebar.number_input("Fixed Annual Other Income / Pension ($)", value=0.0, step=5000.0)
 }
 
 # 3. Add a big action button to trigger the simulation
 if st.button("🚀 Run 10,000-Run Optimization Loop"):
-    with st.spinner("Calculating optimal tax strategies..."):
-        
-        # Run your baseline logic using the interactive dictionary
-        baseline_amount, _ = calculate_final_amount(user_config, mode="zero")
-        
-        # Run your optimization loop function (which returns max_amount and max_conversion_stream)
-        max_amount, max_conversion_stream = run_optimization_loop(user_config, iterations=10000)
-        
-        # Print summary statistics onto the web page dashboard
-        st.success("Optimization Complete!")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(label="Optimized Estate Value to Heirs", value=f"${max_amount / 1000000:.2f} Million")
-        with col2:
-            st.metric(label="Baseline Value (No Conversions)", value=f"${baseline_amount / 1000000:.2f} Million")
-            
-        tax_savings = (max_amount - baseline_amount) / 1000000
-        if tax_savings > 0:
-            st.write(f"📈 Converting saved your heirs **${tax_savings:.2f} Million** in tax drag!")
-        else:
-            st.write("📉 For this profile, a strategy of **Zero Conversions** is mathematically optimal.")
 
-        # 🚨 NEW: Structure the schedule into a clean table for the user interface
-        st.subheader("🗓️ Optimal Annual Conversion Schedule")
-        st.write("This stream represents the highest scoring sequence discovered by the simulator:")
-        
-        # Build matching calendar years list
-        start_year = user_config["first_year_of_conversions"]
-        schedule_data = {
-            "Calendar Year": [start_year + idx for idx in range(len(max_conversion_stream))],
-            "Conversion Amount": max_conversion_stream
-        }
-        
-        # Convert to a data framework layout
-        df = pd.DataFrame(schedule_data)
-        
-        # Display the table with professional currency formatting
-        st.dataframe(
-            df.style.format({"Conversion Amount": "${:,.2f}"}),
-            use_container_width=True,
-            hide_index=True
+    # Calculate starting age when the button is clicked
+    start_year = user_config["first_year_of_conversions"]
+    birth_year = user_config["birth_year"]
+    starting_age = start_year - birth_year
+
+    # 🚨 NEW: Check the age requirement AFTER clicking the button
+    if starting_age >= 75:
+        st.warning(f"⚠️ **Notice: Conversion Window Closed**")
+        st.write(
+            f"In your starting year of {start_year}, your age is **{starting_age}**. "
+            "Because Required Minimum Distributions (RMDs) have already begun or are starting immediately, "
+            "additional Roth conversions are generally no longer tax-efficient for this profile. "
+            "A **Zero Conversion** strategy is mathematically optimal past age 74."
         )
+    else:
+
+
+        with st.spinner("Calculating optimal tax strategies..."):
+            
+            # Run your baseline logic using the interactive dictionary
+            baseline_amount, _ = calculate_final_amount(user_config, mode="zero")
+            
+            # Run your optimization loop function (which returns max_amount and max_conversion_stream)
+            max_amount, max_conversion_stream = run_optimization_loop(user_config, iterations=10000)
+            
+            # Print summary statistics onto the web page dashboard
+            st.success("Optimization Complete!")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(label="Optimized Estate Value to Heirs", value=f"${max_amount / 1000000:.2f} Million")
+            with col2:
+                st.metric(label="Baseline Value (No Conversions)", value=f"${baseline_amount / 1000000:.2f} Million")
+                
+            tax_savings = (max_amount - baseline_amount) / 1000000
+            if tax_savings > 0:
+                st.write(f"📈 Converting saved your heirs **${tax_savings:.2f} Million** in tax drag!")
+            else:
+                st.write("📉 For this profile, a strategy of **Zero Conversions** is mathematically optimal.")
+
+            # 🚨 NEW: Structure the schedule into a clean table for the user interface
+            st.subheader("🗓️ Optimal Annual Conversion Schedule")
+            st.write("This stream represents the highest scoring sequence discovered by the simulator:")
+            
+            # Build matching calendar years list
+            start_year = user_config["first_year_of_conversions"]
+            schedule_data = {
+                "Calendar Year": [start_year + idx for idx in range(len(max_conversion_stream))],
+                "Conversion Amount": max_conversion_stream
+            }
+            
+            # Convert to a data framework layout
+            df = pd.DataFrame(schedule_data)
+            
+            # Display the table with professional currency formatting
+            st.dataframe(
+                df.style.format({"Conversion Amount": "${:,.2f}"}),
+                use_container_width=True,
+                hide_index=True
+            )
 
 run_optimization_loop(my_profile)
