@@ -706,7 +706,7 @@ import pandas as pd  # Streamlit uses pandas dataframes to display tables beauti
 # 1. Add a visual title to the web page
 st.title("🎯 Optimal Roth Conversion Calculator")
 st.write("Can you benefit from tax arbitrage?  Try it and see!")
-st.write("Adjust the parameters on the sidebar to find your optimal conversion stream."
+st.write("Adjust the parameters on the sidebar to find your optimal conversion stream.")
 st.write("Click Documentation & Assumptions for an explanation of tax arbitrage, the parameters, and my built-in assumptions.")
 
 # 2. Turn your parameters into interactive sidebar sliders and inputs
