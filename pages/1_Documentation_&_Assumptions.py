@@ -17,7 +17,7 @@ st.write(
 )
 st.write(
     "By executing tactical Roth conversions during these early retirement valleys, you can choose to prepay taxes "
-    "at today's lower tax bracket thresholds [ORDINARY_BRACKETS_2026]. This permanently insulates your wealth from future "
+    "at today's lower tax bracket thresholds. This permanently insulates your wealth from future "
     "tax hikes and allows your assets to grow completely tax-free for your heirs."
 )
 
@@ -28,10 +28,10 @@ st.write(
 )
 st.write(
     "If your brokerage account generates substantial qualified dividends, those dividends sit stacked entirely on top "
-    "of your ordinary income [calculate_federal_tax]. The IRS allows qualified dividends to be taxed at a preferential **0% rate** "
-    "only if your total combined income remains below the baseline threshold (roughly $49,450) [calculate_federal_tax]. "
+    "of your ordinary income. The IRS allows qualified dividends to be taxed at a preferential **0% rate** "
+    "only if your total combined income remains below the baseline threshold (roughly $49,450). "
     "If you perform a large Roth conversion, that ordinary income will instantly push your dividends out of the 0% zone "
-    "and cause them to be taxed at **15%** [calculate_federal_tax]. This 'phantom tax drag' means your true tax rate on the conversion "
+    "and cause them to be taxed at **15%**. This 'phantom tax drag' means your true tax rate on the conversion "
     "is significantly higher than what the standard tax bracket suggests, sometimes making a conversion strategy completely inefficient."
 )
 
@@ -40,7 +40,7 @@ st.divider() # Adds a clean visual line separating the intro from the parameter 
 # --- SECTION 1: PARAMETER GLOSSARY ---
 st.header("🗂️ 1. Parameter Definitions")
 
-with st.expander("👤 Heir Tax Discount Factor (Default: 0.77)", expanded=True):
+with st.expander("👤 Heir Tax Discount Factor (Default: 0.77)"):
     st.write(
         "**What it means:** Traditional IRAs carry a 'hidden' tax debt. When your heirs inherit a Traditional IRA, "
         "the IRS requires them to withdraw the entire balance within 10 years (under the SECURE Act) and pay ordinary income taxes on it. "
@@ -84,8 +84,8 @@ st.markdown(
 st.subheader("👵 Social Security Mechanics")
 st.markdown(
     "- **Age 62 Claiming:** The program locks in Social Security cash inflows to automatically begin the exact year the user turns 62.\n"
-    "- **Maximum Benefit Allocation:** The benefit is hardcoded to a fixed baseline of $ 35,628 per year ($ 2,969/month), assuming the user qualified for the maximum possible earnings record prior to taking early retirement.\n"
-    "- **Provisional Income Squeeze:** The engine routes this benefit through the exact multi-tier IRS inclusion thresholds ($ 25,000 / $ 34,000 combined income lines) to dynamically subject up to 85% of your benefits to ordinary income tax based on your annual conversion streams."
+    "- **Maximum Benefit Allocation:** The benefit is hardcoded to a fixed baseline of 35,628 per year (2,969/month), assuming the user qualified for the maximum possible earnings record prior to taking early retirement.\n"
+    "- **Provisional Income Squeeze:** The engine routes this benefit through the exact multi-tier IRS inclusion thresholds (25,000 / 34,000 combined income lines) to dynamically subject up to 85% of your benefits to ordinary income tax based on your annual conversion streams."
 )
 
 st.subheader("🛑 Conversion Cutoffs")
