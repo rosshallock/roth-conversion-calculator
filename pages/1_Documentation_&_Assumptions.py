@@ -29,7 +29,7 @@ st.write(
 st.write(
     "If your brokerage account generates substantial qualified dividends, those dividends sit stacked entirely on top "
     "of your ordinary income. The IRS allows qualified dividends to be taxed at a preferential **0% rate** "
-    "only if your total combined income remains below the baseline threshold (roughly $49,450). "
+    "only if your total combined income remains below the baseline threshold (roughly $65,000). "
     "If you perform a large Roth conversion, that ordinary income will instantly push your dividends out of the 0% zone "
     "and cause them to be taxed at **15%**. This 'phantom tax drag' means your true tax rate on the conversion "
     "is significantly higher than what the standard tax bracket suggests, sometimes making a conversion strategy completely inefficient."
