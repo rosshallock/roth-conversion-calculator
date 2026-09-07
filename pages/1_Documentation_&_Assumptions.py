@@ -83,9 +83,13 @@ st.markdown(
 
 st.subheader("👵 Social Security Mechanics")
 st.markdown(
-    "- **Age 62 Claiming:** The program locks in Social Security cash inflows to automatically begin the exact year the user turns 62.\n"
-    "- **Maximum Benefit Allocation:** The benefit is hardcoded to a fixed baseline of 35,628 per year (2,969/month), assuming the user qualified for the maximum possible earnings record prior to taking early retirement.\n"
-    "- **Provisional Income Squeeze:** The engine routes this benefit through the exact multi-tier IRS inclusion thresholds (25,000 / 34,000 combined income lines) to dynamically subject up to 85% of your benefits to ordinary income tax based on your annual conversion streams."
+    "- **Age 62 Claiming:** The program locks in Social Security cash inflows to automatically begin the exact year the user turns 62. "
+    "While delaying benefits increases the nominal monthly check, **claiming early at age 62 is mathematically optimized for this model for three vital reasons:**\n\n"
+    "  1. **The Time Value of Money:** A dollar received today is worth more than a dollar received tomorrow. By collecting early, you unlock decades of liquidity that can immediately begin compounding.\n"
+    "  2. **Reinvestment & S&P 500 Growth:** Instead of leaving your benefit to grow at a fixed rate with the Social Security Administration, claiming at 62 allows that cash flow to be swept into your taxable brokerage account and aggressively grow at your simulated **S&P 500 Growth Rate**.\n"
+    "  3. **Bridging the RMD Tax Valley:** Claiming at 62 guarantees you capture a massive block of lifetime cash flows *before* the mandatory RMD tax bomb detonates at age 75. Delaying your claim forces you to completely miss out on years of early, low-tax cash flows, often resulting in your Social Security check getting heavily penalized by much higher tax brackets later in life.\n\n"
+    "- **Maximum Benefit Allocation:** The benefit is hardcoded to a fixed baseline of **$ 35,628 per year** ($ 2,969/month), assuming the user qualified for the maximum possible earnings record prior to taking early retirement.\n"
+    "- **Provisional Income Squeeze:** The engine routes this benefit through the exact multi-tier IRS inclusion thresholds ($ 25,000 / $ 34,000 combined income lines) to dynamically subject up to 85% of your benefits to ordinary income tax based on your annual conversion streams."
 )
 
 st.subheader("🛑 Conversion Cutoffs")
