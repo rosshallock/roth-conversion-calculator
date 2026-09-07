@@ -699,7 +699,7 @@ my_profile = {
     "traditional_discount_factor": 0.77,
     "other_income": 0
 }
-
+"""
 import streamlit as st
 import pandas as pd  # Streamlit uses pandas dataframes to display tables beautifully
 
@@ -716,7 +716,7 @@ user_config = {
     "taxable_brokerage": st.sidebar.number_input("Taxable Brokerage Balance ($)", value=1000000.0, step=10000.0),
     "base_spend": st.sidebar.slider("Annual Base Lifestyle Spend ($)", 20000, 500000, 100000, step=1000),
     "sp500_growth": st.sidebar.slider("S&P 500 Growth Rate (%)", 0.0, 10.0, 7.0) / 100,
-    "div_rate": 0.013,
+    "div_rate": st.sidebar.slider("Annual Dividend Yield (%)", 0.0, 10.0, 1.3, step=0.1) / 100,
     "inflation_factor": 0.023,
     "birth_year": st.sidebar.number_input("Birth Year", value=1975, step=1),
     "death_year": st.sidebar.number_input("Simulate Until Year (Death Year)", value=2065, step=1),
@@ -824,5 +824,5 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
             # 4. Generate the fully interactive line chart widget
             st.line_chart(asset_chart_df, use_container_width=True)
 
-
+"""
 run_optimization_loop(my_profile)
