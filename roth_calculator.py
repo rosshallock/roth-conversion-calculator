@@ -107,6 +107,53 @@ def calculate_inflated_spend(base_spend, base_year, target_year, inflation_facto
     
     return round(inflated_spend, 2)
 
+def calculate_irmaa_surcharge(magi_two_years_prior, current_year, birth_year, inflation_factor):
+    """
+    Computes the annual Medicare IRMAA surcharge penalty for a Single filer.
+    Uses the 2-year lookback rule: Checks if current age is 65+, but evaluates 
+    the past income against thresholds inflated to that past lookback year.
+    """
+    current_age = current_year - birth_year
+    if current_age < 65:
+        return 0.0
+
+    lookback_year = current_year - 2
+
+    # 1. 2026 Baseline Statutory IRMAA Tiers
+    IRMAA_TIERS_2026 = [
+        (106000.00, 0.00, 0.00),     # Base Tier 
+        (133000.00, 74.00, 13.00),   # Tier 1
+        (166000.00, 185.00, 34.00),  # Tier 2
+        (199000.00, 296.00, 55.00),  # Tier 3
+        (414000.00, 407.00, 76.00),  # Tier 4
+        (float('inf'), 444.00, 83.00) # Tier 5
+    ]
+    
+    # 2. Inflate the limits locally to handle the 3-item tuple rows safely
+    years_elapsed = lookback_year - 2026
+    
+    chosen_b_surcharge = 0.0
+    chosen_d_surcharge = 0.0
+    
+    for limit, b_rate, d_rate in IRMAA_TIERS_2026:
+        # Calculate the inflation-adjusted ceiling for this tier
+        if limit == float('inf'):
+            inflated_limit = float('inf')
+        else:
+            inflated_limit = round(limit * ((1 + inflation_factor) ** years_elapsed), 2)
+            
+        # Check if income fits inside this inflated threshold
+        if magi_two_years_prior <= inflated_limit:
+            chosen_b_surcharge = b_rate
+            chosen_d_surcharge = d_rate
+            break  # Exit loop immediately once the correct tier is locked in#
+
+           
+    # 3. Convert monthly surcharges into a total annual cash out-of-pocket penalty
+
+    total_annual_irmaa = (chosen_b_surcharge + chosen_d_surcharge) * 12
+    return round(total_annual_irmaa, 2)
+
 def calculate_niit(ordinary_income, qualified_dividends):
     """
     Computes the 3.8% Net Investment Income Tax (NIIT) for a Single filer.
@@ -300,6 +347,9 @@ def calculate_final_amount (config, mode="random", fixed_tokens=None):
     # 1 = fill 12% bracket
     # 2 = fill 22% bracket
     # 3 = fill 24% bracket
+    # 4 = fill to Tier 1 IRMAA cliff
+    # 5 = fill to Tier 2 IRMAA cliff
+    historical_magi = []
 
     # --- 1. THE AUTOMATED LOOP ---
     # range(2027, death_year) runs from 2027 up to (but not including) death_year
@@ -344,9 +394,9 @@ def calculate_final_amount (config, mode="random", fixed_tokens=None):
                 #set the conversion amount equal to zero to determine ordinary income before any conversion
                 pre_conversion_ordinary = calculate_ordinary_income(rmd, 0, social_security, other_income)
 
-                #Call a bracket function that returns all options explicitly
-                room_12, room_22, room_24 = get_all_bracket_options(pre_conversion_ordinary, current_year, config)
-                options_pool = [0.0, room_12, room_22, room_24]
+                #Call a function that returns all options explicitly
+                room_12, room_22, room_24, room_irmaa_1, room_irmaa_2, room_div_15, room_niit, room_div_20 = get_all_options(pre_conversion_ordinary, current_year, config)
+                options_pool = [0.0, room_12, room_22, room_24, room_irmaa_1, room_irmaa_2, room_div_15, room_niit, room_div_20]
 
                 if fixed_tokens is not None and index< len(fixed_tokens):
                     #Hill climber mode: Use the specific bracket strategy forced
@@ -354,19 +404,39 @@ def calculate_final_amount (config, mode="random", fixed_tokens=None):
                     annual_conversion = options_pool[chosen_token]
 
                 else:
-                    #Random search mode: Randomly pick one of the 4 conversion strategies
-                    chosen_token = random.choice([0, 1, 2, 3])
+                    #Random search mode: Randomly pick one of the 9 conversion strategies
+                    chosen_token = random.choice(range(9))
                     annual_conversion = options_pool[chosen_token]
 
             # Fill in the conversion_amounts container
             conversion_amounts.append(annual_conversion)
             token_history.append(chosen_token)
 
-        #1.5 Determine taxes owed after conversion
-
+        #1.5.1 Calculate current year ordinary income and MAGI
+            
         ordinary_income = calculate_ordinary_income(rmd, annual_conversion, social_security, other_income)
+        current_year_magi = ordinary_income + divs_received
+
+        #1.5.2 Save current MAGI into our historical list so future years can read
+        historical_magi.append(current_year_magi)
+
+        #1.5.3 Determine taxes owed after conversion
 
         taxes_owed = calculate_federal_tax(ordinary_income, divs_received, current_year, inflation_factor)
+
+        # 1.6 Calculate Medicare IRMAA surcharges
+        lookback_index = index - 2
+
+        if lookback_index >= 0:
+            lookback_magi = historical_magi[lookback_index]
+            
+            # We call IRMAA using the historical income and the inflation factor of that lookback year
+            irmaa_surcharge = calculate_irmaa_surcharge(
+                lookback_magi, current_year, birth_year, inflation_factor
+            )
+        else:
+            # Fallback for the first two years of the simulation if the user was somehow already 65+
+            irmaa_surcharge = 0.0
 
         # 2. Determine adjustments to taxable account
         annual_spend = calculate_inflated_spend(base_spend, first_year_of_conversions, current_year, inflation_factor)
@@ -377,6 +447,7 @@ def calculate_final_amount (config, mode="random", fixed_tokens=None):
         taxable_brokerage += divs_received
         taxable_brokerage += other_income
         taxable_brokerage -= taxes_owed
+        taxable_brokerage -= irmaa_surcharge
 
         # check for bankruptcy
         if taxable_brokerage < 0:
@@ -432,7 +503,7 @@ def generic_hill_climb_polish(config, starting_tokens, starting_amount, steps=30
         original_token = current_best_tokens[random_year_idx]
         
         # Select from alternative strategy tokens (0=zero, 1=12%, 2=22%, 3=24%)
-        alternatives = [t for t in [0, 1, 2, 3] if t != original_token]
+        alternatives = [t for t in range(9) if t != original_token]
         tweaked_token = random.choice(alternatives)
         
         current_best_tokens[random_year_idx] = tweaked_token
@@ -451,10 +522,11 @@ def generic_hill_climb_polish(config, starting_tokens, starting_amount, steps=30
     )
     return final_amt, final_stream, final_timeline, final_tokens
 
-def get_all_bracket_options(pre_conversion_ordinary, current_year, config):
+def get_all_options(pre_conversion_ordinary, current_year, config):
     """
     Determines the exact conversion amounts needed to fill the 12%, 22%, and 24% 
-    tax brackets for the current year
+    tax brackets for the current year, as well as the Tier 1 and Tier 2 Medicare IRMAA surcharge cliffs,
+    NIIT thresholds, and preferential qualified dividend capital gains jumps
     """
     # 1. Unpack structural inflation factor from config
     inflation_factor = config["inflation_factor"]
@@ -464,10 +536,14 @@ def get_all_bracket_options(pre_conversion_ordinary, current_year, config):
         (12400.00, 0.10), (50400.00, 0.12), (105700.00, 0.22),
         (201775.00, 0.24), (256225.00, 0.32), (640600.00, 0.35), (float('inf'), 0.37)
     ]
+
+    QUALIFIED_BRACKETS_2026 = [(49450.00, 0.00), (545500.00, 0.15), (float('inf'), 0.20)]
+
     STANDARD_DEDUCTION_BASE = [(16100.00, 1.0)]
 
     # 3. Inflate the brackets and standard deduction for the simulated year
     current_ord_brackets = inflate_tax_brackets(ORDINARY_BRACKETS_2026, 2026, current_year, inflation_factor)
+    current_qual_brackets = inflate_tax_brackets(QUALIFIED_BRACKETS_2026, 2026, current_year, inflation_factor)
     inflated_deduction_list = inflate_tax_brackets(STANDARD_DEDUCTION_BASE, 2026, current_year, inflation_factor)
     current_standard_deduction = inflated_deduction_list[0][0]
 
@@ -476,17 +552,43 @@ def get_all_bracket_options(pre_conversion_ordinary, current_year, config):
     top_of_22_bracket = current_ord_brackets[2][0]  # The $105,700 line (inflated)
     top_of_24_bracket = current_ord_brackets[3][0]  # The $201,775 line (inflated)
 
+    # 4.1 🚨 Dynamically inflate the IRMAA baseline cliffs for this future year
+    # We apply the same inflation rule to the baseline $106k and $133k statutory limits.
+    max_magi_irmaa_1 = round(106000.00 * ((1 + inflation_factor) ** (current_year - 2026)), 2)
+    max_magi_irmaa_2 = round(133000.00 * ((1 + inflation_factor) ** (current_year - 2026)), 2)
+
+
     # 5. Calculate Gross Gross Caps (Bracket Boundary + Standard Deduction)
     max_gross_for_12 = top_of_12_bracket + current_standard_deduction
     max_gross_for_22 = top_of_22_bracket + current_standard_deduction
     max_gross_for_24 = top_of_24_bracket + current_standard_deduction
+
+    # Preferential Capital Gains & NIIT Targets
+    # Note: Capital gains brackets apply to Net Taxable Ordinary Income (Gross minus Standard Deduction)
+    max_taxable_div_jump_15 = current_qual_brackets[0][0]
+    max_taxable_div_jump_20 = current_qual_brackets[1][0]
+    
+    # Gross Targets = Taxable target + Standard Deduction
+    max_gross_div_15 = max_taxable_div_jump_15 + current_standard_deduction
+    max_gross_div_20 = max_taxable_div_jump_20 + current_standard_deduction
+    
+    # NIIT applies to MAGI directly (unadjusted for inflation)
+    max_magi_niit = 200000.00
 
     # 6. Calculate remaining space (Floor at 0.0 if other income already fills it)
     room_in_12 = max(0.0, max_gross_for_12 - pre_conversion_ordinary)
     room_in_22 = max(0.0, max_gross_for_22 - pre_conversion_ordinary)
     room_in_24 = max(0.0, max_gross_for_24 - pre_conversion_ordinary)
 
-    return round(room_in_12, 2), round(room_in_22, 2), round(room_in_24, 2)
+    # For IRMAA space, we subtract ordinary income directly because IRMAA limits apply to MAGI
+    room_irmaa_1 = max(0.0, max_magi_irmaa_1 - pre_conversion_ordinary)
+    room_irmaa_2 = max(0.0, max_magi_irmaa_2 - pre_conversion_ordinary)
+
+    room_div_15 = max(0.0, max_gross_div_15 - pre_conversion_ordinary)
+    room_niit = max(0.0, max_magi_niit - pre_conversion_ordinary)
+    room_div_20 = max(0.0, max_gross_div_20 - pre_conversion_ordinary)
+
+    return round(room_in_12, 2), round(room_in_22, 2), round(room_in_24, 2), round(room_irmaa_1), round(room_irmaa_2), round(room_div_15), round(room_niit), round(room_div_20)
 
 def run_optimization_loop(config, iterations=10000):
     """
@@ -558,10 +660,15 @@ def run_optimization_loop(config, iterations=10000):
     
     # Text mapping to translate tokens into friendly labels
     strategy_mapping = {
-        0: "Zero Conversion",
-        1: "Fill 12% Bracket",
-        2: "Fill 22% Bracket",
-        3: "Fill 24% Bracket"
+                0: "Zero Conversion",
+                1: "Fill 12% Bracket",
+                2: "Fill 22% Bracket",
+                3: "Fill 24% Bracket",
+                4: "Fill to IRMAA Tier 1 Cliff ($106k)",
+                5: "Fill to IRMAA Tier 2 Cliff ($133k)",
+                6: "Fill to 15% Dividend Tax Jump",
+                7: "Fill to NIIT Surtax Limit ($200k)",
+                8: "Fill to 20% Dividend Tax Jump"
     }
 
     for year_idx, amount in enumerate(absolute_best_stream):
@@ -581,7 +688,7 @@ def run_optimization_loop(config, iterations=10000):
 my_profile = {
     "traditional_ira": 1700000.00,
     "roth_ira": 0.00,
-    "taxable_brokerage": 7000000.00,
+    "taxable_brokerage": 1000000.00,
     "base_spend": 100000.00,
     "sp500_growth": 0.07,
     "div_rate": 0.013,
@@ -604,17 +711,17 @@ st.write("Adjust the parameters below to find your optimal conversion stream.")
 st.sidebar.header("User Financial Profile")
 
 user_config = {
-    "traditional_ira": st.sidebar.number_input("Traditional IRA Balance ($)", value=1700000.0, step=50000.0),
+    "traditional_ira": st.sidebar.number_input("Traditional IRA Balance ($)", value=1700000.0, step=10000.0),
     "roth_ira": st.sidebar.number_input("Starting Roth IRA Balance ($)", value=0.0, step=10000.0),
-    "taxable_brokerage": st.sidebar.number_input("Taxable Brokerage Balance ($)", value=1000000.0, step=50000.0),
-    "base_spend": st.sidebar.slider("Annual Base Lifestyle Spend ($)", 20000, 200000, 100000),
-    "sp500_growth": st.sidebar.slider("S&P 500 Growth Rate (%)", 3.0, 10.0, 7.0) / 100,
+    "taxable_brokerage": st.sidebar.number_input("Taxable Brokerage Balance ($)", value=1000000.0, step=10000.0),
+    "base_spend": st.sidebar.slider("Annual Base Lifestyle Spend ($)", 20000, 500000, 100000, step=1000),
+    "sp500_growth": st.sidebar.slider("S&P 500 Growth Rate (%)", 0.0, 10.0, 7.0) / 100,
     "div_rate": 0.013,
     "inflation_factor": 0.023,
     "birth_year": st.sidebar.number_input("Birth Year", value=1975, step=1),
     "death_year": st.sidebar.number_input("Simulate Until Year (Death Year)", value=2065, step=1),
     "first_year_of_conversions": 2027,
-    "traditional_discount_factor": st.sidebar.slider("Heir Tax Discount Factor (0.77 = 23% tax)", 0.50, 1.00, 0.77),
+    "traditional_discount_factor": st.sidebar.slider("Heir Tax Discount Factor (0.77 = 23% tax rate)", 0.50, 1.00, 0.77),
     "other_income": st.sidebar.number_input("Fixed Annual Other Income / Pension ($)", value=0.0, step=5000.0)
 }
 
@@ -668,7 +775,12 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
                 0: "Zero Conversion",
                 1: "Fill 12% Bracket",
                 2: "Fill 22% Bracket",
-                3: "Fill 24% Bracket"
+                3: "Fill 24% Bracket",
+                4: "Fill to IRMAA Tier 1 Cliff",
+                5: "Fill to IRMAA Tier 2 Cliff",
+                6: "Fill to 15% Dividend Tax Jump",
+                7: "Fill to NIIT Surtax Limit",
+                8: "Fill to 20% Dividend Tax Jump"
             }
             # Translate your raw token history list into text strings
             strategy_names = [strategy_mapping[token] for token in best_tokens]
