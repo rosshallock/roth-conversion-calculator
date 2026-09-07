@@ -699,13 +699,14 @@ my_profile = {
     "traditional_discount_factor": 0.77,
     "other_income": 0
 }
-"""
+
 import streamlit as st
 import pandas as pd  # Streamlit uses pandas dataframes to display tables beautifully
 
 # 1. Add a visual title to the web page
 st.title("🎯 Optimal Roth Conversion Calculator")
-st.write("Adjust the parameters below to find your optimal conversion stream.")
+st.write("Can you benefit from tax arbitrage?  Try it and see!")
+st.write("Adjust the parameters to the right to find your optimal conversion stream.")
 
 # 2. Turn your parameters into interactive sidebar sliders and inputs
 st.sidebar.header("User Financial Profile")
@@ -824,5 +825,5 @@ if st.button("🚀 Run 10,000-Run Optimization Loop"):
             # 4. Generate the fully interactive line chart widget
             st.line_chart(asset_chart_df, use_container_width=True)
 
-"""
+
 run_optimization_loop(my_profile)
